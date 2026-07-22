@@ -1,4 +1,4 @@
-# PhD Study Chat
+# ChatwithMyPAPER
 
 By Zaide Montes
 
