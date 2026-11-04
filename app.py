@@ -2,27 +2,31 @@
 app.py
 ------
 A study assistant for PhD defense preparation, grounded in one paper.
-Uses the Google Gemini API, which has a genuine, permanent free tier
-(no credit card, no expiration), unlike the Anthropic API used elsewhere
-in this portfolio, which has no free tier at all.
+Uses the Google Gemini API, which has a free tier (no credit card),
+unlike the Anthropic API, which has no free tier at all.
 
-Run with: streamlit run app.py
+Run with: python -m streamlit run app.py
 
-Cost control, by design:
-- Uses Gemini 2.5 Flash-Lite, the model with the most generous free tier
-  rate limits (as of mid-2026: roughly 15 to 30 requests per minute and
-  1,000+ requests per day, no card required).
+Bring your own key, by design:
+Each visitor enters their own free Gemini API key rather than the app
+using a single shared key. The owner of this portfolio never pays for or
+is rate-limited by anyone else's usage, and there is no shared secret to
+leak. The key is kept only in that browser's session state for the
+current visit, never written to disk, and sent only to Google's API.
+
+Cost and reliability, by design:
+- Uses Gemini 3.1 Flash-Lite, which is available on the free tier.
 - Caps response length (max_output_tokens).
-- Caps the number of exchanges per browser session, mainly to stay well
-  under the daily free-tier request quota if the page gets shared, not
-  because of any billing risk.
+- Caps the number of exchanges per browser session.
+- Retries a few times when Google returns a temporary 503 (overloaded).
 
-Privacy note, stated plainly for whoever deploys this: on Google's free
-tier, prompts and responses may be used to improve Google's products.
-That is an acceptable tradeoff here because the grounding content is a
-published, open-access paper, not private or sensitive material. If you
-ever swap in different content, revisit this tradeoff first.
+Privacy note: on Google's free tier, prompts and responses may be used to
+improve Google's products. That is acceptable here because the grounding
+content is a published, open-access paper. If you ever swap in different
+content, revisit this tradeoff first.
 """
+
+import time
 
 import streamlit as st
 from google import genai
@@ -33,6 +37,7 @@ from src.knowledge_base import build_system_prompt
 MODEL = "gemini-3.1-flash-lite"
 MAX_OUTPUT_TOKENS = 600
 MAX_MESSAGES_PER_SESSION = 20
+MAX_ATTEMPTS = 3
 
 st.set_page_config(
     page_title="Chat with my paper III",
@@ -49,24 +54,58 @@ st.caption(
 )
 
 st.info(
-    f"This is a general chatbot. It only answers "
+    f"This is a scoped chatbot, not a general one. It only answers "
     f"from the paper's text, and this session is capped at "
     f"{MAX_MESSAGES_PER_SESSION} exchanges."
 )
 
-if "api_key_missing" not in st.session_state:
-    st.session_state.api_key_missing = "GEMINI_API_KEY" not in st.secrets
+# --------------------------------------------------------------------------
+# Bring your own API key
+# --------------------------------------------------------------------------
 
-if st.session_state.api_key_missing:
-    st.error(
-        "No API key found. Add GEMINI_API_KEY to Streamlit secrets "
-        "before this app can answer questions. See the README for how, "
-        "it is free to get one."
+if "user_api_key" not in st.session_state:
+    st.session_state.user_api_key = ""
+
+with st.expander(
+    "Enter your free Gemini API key to use this tool",
+    expanded=not st.session_state.user_api_key,
+):
+    st.markdown(
+        "This tool needs your own free Google Gemini API key, not the "
+        "portfolio owner's. Get one at "
+        "[aistudio.google.com](https://aistudio.google.com), sign in with "
+        "a Google account, click \"Get API key,\" then \"Create API key.\" "
+        "No credit card is required."
     )
+    entered_key = st.text_input(
+        "Your Gemini API key",
+        type="password",
+        value=st.session_state.user_api_key,
+        placeholder="Paste your key here",
+    )
+    if entered_key != st.session_state.user_api_key:
+        st.session_state.user_api_key = entered_key
+        st.session_state.pop("gemini_client", None)
+        st.session_state.pop("chat_session", None)
+        st.session_state.display_messages = []
+    st.caption(
+        "Your key is used only in this browser session to call Google's "
+        "API directly. It is never saved to disk and never sent anywhere "
+        "other than Google."
+    )
+
+if not st.session_state.user_api_key:
+    st.warning("Enter your Gemini API key above to start chatting.")
     st.stop()
 
 if "gemini_client" not in st.session_state:
-    st.session_state.gemini_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+    try:
+        st.session_state.gemini_client = genai.Client(
+            api_key=st.session_state.user_api_key
+        )
+    except Exception as e:
+        st.error(f"Could not set up the Gemini client with that key: {e}")
+        st.stop()
 
 if "system_prompt" not in st.session_state:
     try:
@@ -110,11 +149,31 @@ if user_input:
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            try:
-                response = st.session_state.chat_session.send_message(user_input)
-                reply = response.text
-            except Exception as e:
-                reply = f"Something went wrong calling the API: {e}"
+            reply = None
+            for attempt in range(MAX_ATTEMPTS):
+                try:
+                    response = st.session_state.chat_session.send_message(user_input)
+                    reply = response.text
+                    break
+                except Exception as e:
+                    error_text = str(e)
+                    is_busy = "503" in error_text or "UNAVAILABLE" in error_text
+                    if is_busy and attempt < MAX_ATTEMPTS - 1:
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                    if is_busy:
+                        reply = (
+                            "Google's model is overloaded right now. This is "
+                            "temporary and not caused by your key. Please try "
+                            "again in a minute."
+                        )
+                    else:
+                        reply = (
+                            f"Something went wrong calling the API: {e}\n\n"
+                            "If this mentions an invalid key, check that you "
+                            "pasted your Gemini API key correctly above."
+                        )
+                    break
         st.markdown(reply)
 
     st.session_state.display_messages.append({"role": "assistant", "content": reply})
