@@ -7,12 +7,14 @@ unlike the Anthropic API, which has no free tier at all.
 
 Run with: python -m streamlit run app.py
 
-Bring your own key, by design:
-Each visitor enters their own free Gemini API key rather than the app
-using a single shared key. The owner of this portfolio never pays for or
-is rate-limited by anyone else's usage, and there is no shared secret to
-leak. The key is kept only in that browser's session state for the
-current visit, never written to disk, and sent only to Google's API.
+How the API key works:
+- By default the app uses the owner's free-tier key stored in Streamlit
+  secrets (GEMINI_API_KEY), so visitors can try it without setting up
+  anything. The key is never shown in the page or the code.
+- The owner's key has no billing attached, so heavy use can at worst use
+  up the free daily quota, never create a charge.
+- If that shared quota runs out, or a visitor prefers it, they can paste
+  their own free key. It lives only in that browser session.
 
 Cost and reliability, by design:
 - Uses Gemini 3.1 Flash-Lite, which is available on the free tier.
@@ -39,6 +41,15 @@ MAX_OUTPUT_TOKENS = 600
 MAX_MESSAGES_PER_SESSION = 20
 MAX_ATTEMPTS = 3
 
+
+def get_owner_key() -> str:
+    """Return the owner's key from Streamlit secrets, or an empty string."""
+    try:
+        return st.secrets.get("GEMINI_API_KEY", "")
+    except Exception:
+        return ""
+
+
 st.set_page_config(
     page_title="Chat with my paper III",
     layout="centered",
@@ -60,22 +71,29 @@ st.info(
 )
 
 # --------------------------------------------------------------------------
-# Bring your own API key
+# API key: owner's key by default, visitor's own key as optional fallback
 # --------------------------------------------------------------------------
+
+owner_key = get_owner_key()
 
 if "user_api_key" not in st.session_state:
     st.session_state.user_api_key = ""
 
+expander_label = (
+    "Optional: use your own free Gemini API key"
+    if owner_key
+    else "Enter your free Gemini API key to use this tool"
+)
+
 with st.expander(
-    "Enter your free Gemini API key to use this tool",
-    expanded=not st.session_state.user_api_key,
+    expander_label,
+    expanded=not owner_key and not st.session_state.user_api_key,
 ):
     st.markdown(
-        "This tool needs your own free Google Gemini API key, not the "
-        "portfolio owner's. Get one at "
-        "[aistudio.google.com](https://aistudio.google.com), sign in with "
-        "a Google account, click \"Get API key,\" then \"Create API key.\" "
-        "No credit card is required."
+        "A free Google Gemini API key lets you use your own quota. Get one "
+        "at [aistudio.google.com](https://aistudio.google.com), sign in "
+        "with a Google account, click \"Get API key,\" then \"Create API "
+        "key.\" No credit card is required."
     )
     entered_key = st.text_input(
         "Your Gemini API key",
@@ -94,15 +112,16 @@ with st.expander(
         "other than Google."
     )
 
-if not st.session_state.user_api_key:
+active_key = st.session_state.user_api_key or owner_key
+using_owner_key = bool(owner_key) and not st.session_state.user_api_key
+
+if not active_key:
     st.warning("Enter your Gemini API key above to start chatting.")
     st.stop()
 
 if "gemini_client" not in st.session_state:
     try:
-        st.session_state.gemini_client = genai.Client(
-            api_key=st.session_state.user_api_key
-        )
+        st.session_state.gemini_client = genai.Client(api_key=active_key)
     except Exception as e:
         st.error(f"Could not set up the Gemini client with that key: {e}")
         st.stop()
@@ -158,6 +177,7 @@ if user_input:
                 except Exception as e:
                     error_text = str(e)
                     is_busy = "503" in error_text or "UNAVAILABLE" in error_text
+                    is_quota = "429" in error_text or "RESOURCE_EXHAUSTED" in error_text
                     if is_busy and attempt < MAX_ATTEMPTS - 1:
                         time.sleep(2 * (attempt + 1))
                         continue
@@ -167,11 +187,18 @@ if user_input:
                             "temporary and not caused by your key. Please try "
                             "again in a minute."
                         )
+                    elif is_quota and using_owner_key:
+                        reply = (
+                            "The shared free quota for this demo has run out "
+                            "for now. You can keep going right away by "
+                            "pasting your own free Gemini API key in the "
+                            "section above, or try again later."
+                        )
                     else:
                         reply = (
                             f"Something went wrong calling the API: {e}\n\n"
                             "If this mentions an invalid key, check that you "
-                            "pasted your Gemini API key correctly above."
+                            "pasted your Gemini API key correctly."
                         )
                     break
         st.markdown(reply)
