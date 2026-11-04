@@ -35,12 +35,12 @@ MAX_OUTPUT_TOKENS = 600
 MAX_MESSAGES_PER_SESSION = 20
 
 st.set_page_config(
-    page_title="PhD Defense Study Chat",
+    page_title="Chat with my paper",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
 
-st.title("PhD Defense Study Chat")
+st.title("Chat with my pape")
 st.caption(
     "Grounded in one paper: Montes-Ortiz et al. 2026, "
     "\"Comparative genomics reveal signatures of ecological specialization "
