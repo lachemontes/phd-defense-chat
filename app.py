@@ -49,7 +49,7 @@ st.caption(
 )
 
 st.info(
-    f"This is a scoped study tool, not a general chatbot. It only answers "
+    f"This is a general chatbot. It only answers "
     f"from the paper's text, and this session is capped at "
     f"{MAX_MESSAGES_PER_SESSION} exchanges."
 )
